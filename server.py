@@ -1,14 +1,11 @@
 #!/usr/bin/env python
 
 import asyncio
-import math
 from websockets.asyncio.server import serve
 from google.protobuf.empty_pb2 import Empty
 from google.protobuf.message import DecodeError
-from realityapi_pb2 import Command, DeviceInfo, Lidar, Response, ServerRequest, Transform, Vector3, RawLidarScan
-from map.coordinate import SERVER_COORDS, TURTLEBOT_COORDS, convert_lidar, convert_transform
+from realityapi_pb2 import Command, DeviceInfo, Response, ServerRequest, RawLidarScan
 from map.map import Map
-from map.lidar import LIDAR_EPSILON, scan_to_world_points, simplify_lidar_2d
 from map.localization import ScanLocalizer
 from map.room import get_room_info
 
@@ -21,33 +18,10 @@ MONITOR_INTERVAL = 0.04
 server_map = Map()
 scan_localizer = ScanLocalizer()
 
-def translate_vec3(vec: Vector3, offset=OFFSET) -> Vector3:
-    """Return a new Vector3 shifted by the offset."""
-    return Vector3(
-        x=vec.x + offset[0],
-        y=vec.y + offset[1],
-        z=vec.z + offset[2],
-    )
-
-def translate_transform(transform: Transform, offset=OFFSET) -> Transform:
-    """Return a new Transform with its position shifted by the offset."""
-    return Transform(
-        position=translate_vec3(transform.position, offset),
-        rotation=transform.rotation,
-    )
-
-def translate_lidar(lidar: Lidar, offset=OFFSET) -> Lidar:
-    return Lidar(points=(translate_vec3(point, offset) for point in lidar.points))
-
 # Handlers for each ServerRequest.data case.
 
 def post_device_info(info: DeviceInfo) -> Response:
-    if info.HasField("transform"):
-        info.transform.CopyFrom(translate_transform(info.transform))
-
-    if info.HasField("lidar"):
-        info.lidar.CopyFrom(translate_lidar(info.lidar))
-
+    # Each device's own coordinate system (and its offset) is applied in Map.
     print(f"<<< device info from {info.id}")
     return server_map.handle_device_info(info)
 
@@ -68,13 +42,8 @@ def fetch_room_data(_: Empty) -> Response:
     return Response(room_data=get_room_info())
 
 def handle_raw_lidar_scan(raw_scan: RawLidarScan) -> Response:
-    lidar = convert_lidar(scan_to_world_points(raw_scan), TURTLEBOT_COORDS, SERVER_COORDS)
-    transform = convert_transform(raw_scan.transform, TURTLEBOT_COORDS, SERVER_COORDS)
-    return server_map.handle_lidar_scan(
-        raw_scan.id,
-        translate_transform(transform),
-        translate_lidar(lidar),
-    )
+    # The robot's first scan places it in the room (see Map.localize).
+    return server_map.handle_lidar_scan(raw_scan)
 
 def send_command(command: Command) -> Response:
     if not server_map.exists(command.target_id):

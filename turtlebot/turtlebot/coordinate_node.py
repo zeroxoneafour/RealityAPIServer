@@ -12,12 +12,18 @@ from websockets.sync.client import connect
 
 from init_turtlebot import create_turtlebot
 from realityapi_pb2 import Response, ServerRequest, Vector3, RawLidarScan
-from map.coordinate import SERVER_COORDS
 
 SERVER_URI = "ws://0.0.0.0:65432"
 
 # The server drops a device after 2 seconds of silence.
 HEARTBEAT_INTERVAL = 1.0
+
+# The robot counts as still below these odometry speeds (m/s and rad/s).
+STILL_LINEAR = 0.01
+STILL_ANGULAR = 0.02
+
+# Seconds between localization attempts. Each one costs the server a room search.
+LOCALIZE_RETRY = 2.0
 
 
 class CoordinateNode(Node):
@@ -25,7 +31,14 @@ class CoordinateNode(Node):
         super().__init__('coordinate_node')
         self.robot = create_turtlebot()
         self.ws = connect(SERVER_URI)
-        self.post_device_info()
+
+        # Nothing but localization scans is sent until the server has placed
+        # this robot in the room.
+        self.localized = False
+        self.have_odom = False
+        self.moving = False
+        self.last_localize_attempt = -math.inf
+        self.get_logger().info('Hold still: localizing against the room')
 
         self.odom_sub = self.create_subscription(
             Odometry,
@@ -44,6 +57,13 @@ class CoordinateNode(Node):
         self.create_timer(HEARTBEAT_INTERVAL, self.heartbeat_callback)
 
     def position_update_callback(self, data: Odometry):
+        twist = data.twist.twist
+        self.moving = (
+            math.hypot(twist.linear.x, twist.linear.y) > STILL_LINEAR
+            or abs(twist.angular.z) > STILL_ANGULAR
+        )
+        self.have_odom = True
+
         position = data.pose.pose.position
         pos_vec = Vector3(x=position.x, y=position.y, z=position.z)
 
@@ -57,12 +77,38 @@ class CoordinateNode(Node):
 
         self.robot.transform.position.CopyFrom(pos_vec)
         self.robot.transform.rotation.CopyFrom(rot_vec)
-        self.post_device_info(log=True)
+        if self.localized:
+            self.post_device_info(log=True)
 
     def lidar_update_callback(self, data: LaserScan):
-        self.send_scan(data)
+        if self.localized:
+            self.send_scan(data)
+        else:
+            self.localize(data)
 
-    def send_scan(self, ros_data):
+    def localize(self, data: LaserScan):
+        """Send one scan, taken while still, for the server to place in the room."""
+        if not self.have_odom:
+            self.get_logger().info('Waiting for odometry before localizing', throttle_duration_sec=2.0)
+            return
+        if self.moving:
+            self.get_logger().warning('Hold still: cannot localize while moving', throttle_duration_sec=2.0)
+            return
+        now = time.monotonic()
+        if now - self.last_localize_attempt < LOCALIZE_RETRY:
+            return
+        self.last_localize_attempt = now
+
+        reply = self.send_scan(data, log=True)
+        if reply.HasField('ok'):
+            self.localized = True
+            self.get_logger().info('Localized against the room; streaming pose and scans')
+        else:
+            self.get_logger().warning(
+                f'Could not localize ({reply.WhichOneof("data")}); retrying. '
+                'If this keeps failing, move the robot somewhere it can see more walls.')
+
+    def send_scan(self, ros_data, log=False) -> Response:
         raw_scan = RawLidarScan(
             id = self.robot.id,
             transform = self.robot.transform,
@@ -72,18 +118,18 @@ class CoordinateNode(Node):
             angle_min = ros_data.angle_min,
             angle_increment = ros_data.angle_increment
         )
-        self.send_request(ServerRequest(post_raw_lidar_scan=raw_scan))
+        return self.send_request(ServerRequest(post_raw_lidar_scan=raw_scan), log=log)
 
     def heartbeat_callback(self):
-        self.send_request(ServerRequest(post_heartbeat=self.robot.id))
+        if self.localized:
+            self.send_request(ServerRequest(post_heartbeat=self.robot.id))
 
     def post_device_info(self, log=False):
         self.robot.timestamp = time.time()
-        # Odometry updates reuse the last scan already stored on the server.
-        device_info = self.robot.get_device_info(
-            target_coords=SERVER_COORDS,
-            include_lidar=False,
-        )
+        # Poses stay in the odometry frame; the server applies this robot's
+        # room offset. Odometry updates reuse the last scan already stored on
+        # the server.
+        device_info = self.robot.get_device_info(include_lidar=False)
         self.send_request(
             ServerRequest(post_device_info=device_info),
             log=log,
@@ -102,11 +148,18 @@ class CoordinateNode(Node):
         if reply.req_uuid != req.req_uuid:
             self.get_logger().warning(
                 f'response {reply.req_uuid} does not match request {req.req_uuid}')
+        # The server forgets a robot that goes quiet, so start over.
+        if self.localized and reply.WhichOneof('data') in ('err_id_not_found', 'err_cannot_execute'):
+            self.localized = False
+            self.get_logger().warning('Server lost this robot. Hold still: relocalizing')
         return reply
 
     def describe(self, req: ServerRequest, include_lidar=False) -> str:
         if req.HasField("post_heartbeat"):
             return f'heartbeat id {req.post_heartbeat}'
+        if req.HasField("post_raw_lidar_scan"):
+            scan = req.post_raw_lidar_scan
+            return f'scan {len(scan.ranges)} ranges id {scan.id}'
         info = req.post_device_info
         if include_lidar:
             p = info.transform.position

@@ -1,15 +1,19 @@
 from time import time
-from dataclasses import InitVar, dataclass, field
+from dataclasses import dataclass, field
 from realityapi_pb2 import DeviceType, Transform, Vector3, DeviceInfo, Lidar
 from google.protobuf.json_format import MessageToDict, ParseDict
-from map.coordinate import CoordinateSystem, Direction, convert_lidar, convert_transform
+from map.coordinate import TURTLEBOT_COORDS, CoordinateSystem, convert_lidar, convert_transform
 
 @dataclass
 class Device:
     id: str
     device_type: DeviceType
     timestamp: float
+    # The frame this device reports in. None means it already reports in
+    # SERVER_COORDS.
     coordinate_system: CoordinateSystem | None = field(default=None, kw_only=True)
+    # Whether coordinate_system's origin/yaw place the device in the room.
+    localized: bool = field(default=True, kw_only=True)
 
     def handle_device_info(self, device_info: DeviceInfo):
         self.id = device_info.id
@@ -32,14 +36,13 @@ class Device:
 class TurtleBot(Device):
     transform: Transform
     lidar: Lidar
-    initial_heading: InitVar[Direction] = Direction.NORTH
+    # A TurtleBot reports in its odometry frame, which only lands in the room
+    # once global localization has set coordinate_system's origin and yaw.
+    localized: bool = field(default=False, kw_only=True)
 
-    def __post_init__(self, initial_heading: Direction):
-        self.coordinate_system = CoordinateSystem(
-            x=initial_heading,
-            y=initial_heading.counterclockwise90(),
-            z=Direction.UP,
-        )
+    def __post_init__(self):
+        if self.coordinate_system is None:
+            self.coordinate_system = TURTLEBOT_COORDS
 
     @classmethod
     def from_packet(cls, device_info: DeviceInfo):

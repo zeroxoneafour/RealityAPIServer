@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum, auto
 import math
 import numpy as np
@@ -41,6 +41,11 @@ class CoordinateSystem:
     y: Direction
     z: Direction
     zero_heading: Direction | None = None
+    # Where this system's origin sits, in SERVER_COORDS meters.
+    origin: tuple[float, float, float] = field(default=(0.0, 0.0, 0.0), kw_only=True)
+    # Counterclockwise (seen from above) rotation, in radians, of this system's
+    # axes away from the directions named by x/y/z.
+    yaw: float = field(default=0.0, kw_only=True)
 
     def __post_init__(self):
         direction_set = {abs(d) for d in (self.x, self.y, self.z)}
@@ -94,14 +99,46 @@ def _apply_matrix(vec: Vector3, matrix: np.ndarray) -> Vector3:
     return Vector3(x=float(x), y=float(y), z=float(z))
 
 
+# Shared frame used to chain conversions. Its UP axis is z, so a yaw is a
+# plain rotation about z.
+_WORLD = CoordinateSystem(x=Direction.EAST, y=Direction.NORTH, z=Direction.UP)
+
+
+def _yaw_matrix(yaw: float) -> np.ndarray:
+    """Counterclockwise rotation about _WORLD's UP axis."""
+    c, s = math.cos(yaw), math.sin(yaw)
+    return np.array([[c, -s, 0.0], [s, c, 0.0], [0.0, 0.0, 1.0]])
+
+
+def _to_world(system: CoordinateSystem) -> tuple[np.ndarray, np.ndarray]:
+    """Return (A, b) such that p_world = A @ p_system + b."""
+    rotation = _yaw_matrix(system.yaw) @ get_transform_matrix(system, _WORLD)
+    origin = get_transform_matrix(SERVER_COORDS, _WORLD) @ np.array(system.origin, dtype=float)
+    return rotation, origin
+
+
+def _point_transform(source: CoordinateSystem, target: CoordinateSystem) -> tuple[np.ndarray, np.ndarray]:
+    """Return (A, b) such that p_target = A @ p_source + b."""
+    src_rotation, src_origin = _to_world(source)
+    tgt_rotation, tgt_origin = _to_world(target)
+    # Every rotation here is orthogonal, so its inverse is its transpose.
+    rotation = tgt_rotation.T @ src_rotation
+    return rotation, tgt_rotation.T @ (src_origin - tgt_origin)
+
+
+def _apply_point(vec: Vector3, rotation: np.ndarray, offset: np.ndarray) -> Vector3:
+    x, y, z = rotation @ np.array([vec.x, vec.y, vec.z], dtype=float) + offset
+    return Vector3(x=float(x), y=float(y), z=float(z))
+
+
 def convert_vector(
     vector: list[float],
     source: CoordinateSystem,
     target: CoordinateSystem,
 ) -> list[float]:
-    """Convert a [x, y, z] list from one coordinate system to another."""
-    matrix = get_transform_matrix(source, target)
-    return (matrix @ np.array(vector)).tolist()
+    """Convert a [x, y, z] point from one coordinate system to another."""
+    rotation, offset = _point_transform(source, target)
+    return (rotation @ np.array(vector, dtype=float) + offset).tolist()
 
 
 def convert_vec3(
@@ -109,11 +146,10 @@ def convert_vec3(
     source: CoordinateSystem,
     target: CoordinateSystem,
 ) -> Vector3:
-    """Convert a protobuf Vector3 from source to target coordinate system."""
+    """Convert a protobuf Vector3 point from source to target coordinate system."""
     if source == target:
         return Vector3(x=vec.x, y=vec.y, z=vec.z)
-    matrix = get_transform_matrix(source, target)
-    return _apply_matrix(vec, matrix)
+    return _apply_point(vec, *_point_transform(source, target))
 
 
 def _heading_offset(source_heading: Direction, target_heading: Direction) -> float:
@@ -136,13 +172,12 @@ def convert_transform(
     """Convert a protobuf Transform (position and rotation) from source to target."""
     if source == target:
         return Transform(position=transform.position, rotation=transform.rotation)
-    matrix = get_transform_matrix(source, target)
-    position = _apply_matrix(transform.position, matrix)
-    rotation = _apply_matrix(transform.rotation, matrix)
+    position = _apply_point(transform.position, *_point_transform(source, target))
+    rotation = _apply_matrix(transform.rotation, get_transform_matrix(source, target))
 
     # Shift yaw about the target's vertical (UP/DOWN) axis to account for any
-    # difference between source.zero_heading and target.zero_heading.
-    yaw_offset = _heading_offset(source.zero_heading, target.zero_heading)
+    # difference between the systems' zero headings and their yaw offsets.
+    yaw_offset = _heading_offset(source.zero_heading, target.zero_heading) + source.yaw - target.yaw
     for axis_name, direction in (("x", target.x), ("y", target.y), ("z", target.z)):
         if abs(direction) == Direction.UP:
             sign = 1.0 if direction == Direction.UP else -1.0
@@ -160,5 +195,5 @@ def convert_lidar(
     """Convert all points in a protobuf Lidar message from source to target."""
     if source == target or not lidar.points:
         return Lidar(points=lidar.points)
-    matrix = get_transform_matrix(source, target)
-    return Lidar(points=[_apply_matrix(pt, matrix) for pt in lidar.points])
+    rotation, offset = _point_transform(source, target)
+    return Lidar(points=[_apply_point(pt, rotation, offset) for pt in lidar.points])

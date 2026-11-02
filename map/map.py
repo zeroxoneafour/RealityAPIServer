@@ -1,10 +1,14 @@
+from dataclasses import replace
 from uuid import UUID
 from time import time
+import numpy as np
+from map.coordinate import SERVER_COORDS, TURTLEBOT_COORDS, convert_lidar, convert_transform, convert_vec3
 from map.device import Device, device_from_info, device_from_dict
-from realityapi_pb2 import AllDeviceInfo, DeviceInfo, Lidar, Response, Transform, Vector3
+from map.global_localization import LocalizationError, localize_in_room
+from realityapi_pb2 import AllDeviceInfo, DeviceInfo, DeviceType, Lidar, RawLidarScan, Response, Vector3
 import json, os
 from map.localization import ScanLocalizer
-from map.lidar import simplify_lidar_2d, LIDAR_EPSILON
+from map.lidar import scan_to_world_points, simplify_lidar_2d, LIDAR_EPSILON
 
 class Map:
     def __init__(self) -> None:
@@ -52,33 +56,103 @@ class Map:
         except Exception as e:
             print(f"Error loading from JSON: {e}")
 
-    def handle_lidar_scan(self, device_id: str, transform: Transform, lidar: Lidar) -> Response:
-        # A scan can update an existing device but cannot create one by itself.
-        if not self.exists(device_id):
-            return Response(err_id_not_found={})
+    def handle_lidar_scan(self, raw_scan: RawLidarScan) -> Response:
+        device = self._devices.get(raw_scan.id)
+        # Until a robot is placed in the room, its scans are used to place it.
+        # This is also how a robot dropped for inactivity gets back on the map.
+        if device is None or not device.localized:
+            device = self.localize(raw_scan, device)
+            if device is None:
+                return Response(err_cannot_execute={})
+        if device.coordinate_system is None:
+            return Response(err_not_supported={})
 
-        localizer = self._localizers.setdefault(device_id, ScanLocalizer())
+        lidar = convert_lidar(scan_to_world_points(raw_scan), device.coordinate_system, SERVER_COORDS)
+        transform = convert_transform(raw_scan.transform, device.coordinate_system, SERVER_COORDS)
+
+        localizer = self._localizers.setdefault(device.id, ScanLocalizer())
         localizer.update(lidar)
-        return self.handle_device_info(DeviceInfo(
-            id=device_id,
+        return self._update_device(device, DeviceInfo(
+            id=device.id,
             transform=transform,
             lidar=simplify_lidar_2d(localizer.correct_lidar(lidar), epsilon=LIDAR_EPSILON),
         ))
-    
+
+    def localize(self, raw_scan: RawLidarScan, device: Device | None) -> Device | None:
+        """Place a robot in the room from one scan, creating it if needed.
+
+        The result is stored as the origin/yaw of the robot's coordinate system,
+        so every later pose and scan from the robot is converted with it.
+        Returns None if the scan cannot be placed.
+        """
+        # The robot's axis directions, without any offset.
+        nominal = replace(
+            device.coordinate_system if device and device.coordinate_system else TURTLEBOT_COORDS,
+            origin=(0.0, 0.0, 0.0),
+            yaw=0.0,
+        )
+        scan = convert_lidar(scan_to_world_points(raw_scan), nominal, SERVER_COORDS)
+        robot = convert_vec3(raw_scan.transform.position, nominal, SERVER_COORDS)
+        try:
+            result = localize_in_room(
+                np.array([[point.x, point.z] for point in scan.points]).reshape(-1, 2),
+                np.array([robot.x, robot.z]),
+            )
+        except LocalizationError as e:
+            print(f"Could not localize {raw_scan.id}: {e}")
+            return None
+
+        x, z = result.origin
+        coordinate_system = replace(nominal, origin=(x, 0.0, z), yaw=result.yaw)
+        if device is None:
+            device = device_from_info(DeviceInfo(id=raw_scan.id, device_type=DeviceType.TURTLE, timestamp=time()))
+            if device is None:
+                return None
+            self.add_device(device)
+        device.coordinate_system = coordinate_system
+        device.localized = True
+        # Any drift map belongs to the old frame.
+        self._localizers.pop(device.id, None)
+
+        print(
+            f"Localized {device.id}: odom origin at ({x:.2f}, {z:.2f}), "
+            f"yaw {np.degrees(result.yaw):.1f} deg, {result.inlier_ratio:.0%} on walls, "
+            f"ambiguity {result.ambiguity:.2f}"
+        )
+        return device
+
     def handle_device_info(self, device_info: DeviceInfo) -> Response:
-        # Every pose, from /odom or a scan, gets the correction exactly once here
-        localizer = self._localizers.get(device_info.id)
-        if localizer is not None and device_info.HasField("transform"):
-            device_info.transform.CopyFrom(localizer.correct_transform(device_info.transform))
-        if device_info.id in self._devices: # if id of robot exists, set new position
-            device = self._devices[device_info.id]
-            device.handle_device_info(device_info)
-            print(f"Set position for device: {device.id}")
-        else: # if robot id does not exist, add it as a device
+        """Update a device from info reported in the device's own frame."""
+        device = self._devices.get(device_info.id)
+        if device is None: # if robot id does not exist, add it as a device
             device = device_from_info(device_info)
             if device is None:
                 return Response(err_not_supported={})
+            # Only a localization scan can place this kind of device in the room.
+            if not device.localized:
+                return Response(err_cannot_execute={})
             self.add_device(device)
+        elif not device.localized:
+            return Response(err_cannot_execute={})
+
+        if device.coordinate_system is not None:
+            if device_info.HasField("transform"):
+                device_info.transform.CopyFrom(
+                    convert_transform(device_info.transform, device.coordinate_system, SERVER_COORDS))
+            if device_info.HasField("lidar"):
+                device_info.lidar.CopyFrom(
+                    convert_lidar(device_info.lidar, device.coordinate_system, SERVER_COORDS))
+
+        return self._update_device(device, device_info)
+
+    def _update_device(self, device: Device, device_info: DeviceInfo) -> Response:
+        """Store info that is already in SERVER_COORDS."""
+        # Every pose, from /odom or a scan, gets the correction exactly once here
+        localizer = self._localizers.get(device.id)
+        if localizer is not None and device_info.HasField("transform"):
+            device_info.transform.CopyFrom(localizer.correct_transform(device_info.transform))
+        device.handle_device_info(device_info)
+        print(f"Set position for device: {device.id}")
 
         # A position report is also proof the device is still alive. Use the
         # server clock: the float32 wire timestamp is only accurate to ~128s.

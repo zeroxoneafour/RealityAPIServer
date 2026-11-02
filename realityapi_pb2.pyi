@@ -23,6 +23,14 @@ DOG: DeviceType
 ARM: DeviceType
 TURTLE: DeviceType
 
+class Vector2(_message.Message):
+    __slots__ = ("x", "y")
+    X_FIELD_NUMBER: _ClassVar[int]
+    Y_FIELD_NUMBER: _ClassVar[int]
+    x: float
+    y: float
+    def __init__(self, x: _Optional[float] = ..., y: _Optional[float] = ...) -> None: ...
+
 class Vector3(_message.Message):
     __slots__ = ("x", "y", "z")
     X_FIELD_NUMBER: _ClassVar[int]
@@ -65,6 +73,12 @@ class RawLidarScan(_message.Message):
     angle_increment: float
     def __init__(self, id: _Optional[str] = ..., transform: _Optional[_Union[Transform, _Mapping]] = ..., ranges: _Optional[_Iterable[float]] = ..., range_min: _Optional[float] = ..., range_max: _Optional[float] = ..., angle_min: _Optional[float] = ..., angle_increment: _Optional[float] = ...) -> None: ...
 
+class RoomInfo(_message.Message):
+    __slots__ = ("corners",)
+    CORNERS_FIELD_NUMBER: _ClassVar[int]
+    corners: _containers.RepeatedCompositeFieldContainer[Vector2]
+    def __init__(self, corners: _Optional[_Iterable[_Union[Vector2, _Mapping]]] = ...) -> None: ...
+
 class DeviceInfo(_message.Message):
     __slots__ = ("id", "device_type", "timestamp", "transform", "lidar")
     ID_FIELD_NUMBER: _ClassVar[int]
@@ -86,7 +100,7 @@ class AllDeviceInfo(_message.Message):
     def __init__(self, devices: _Optional[_Iterable[_Union[DeviceInfo, _Mapping]]] = ...) -> None: ...
 
 class Response(_message.Message):
-    __slots__ = ("req_uuid", "ok", "err_id_not_found", "err_not_supported", "err_cannot_execute", "err_failed_execute", "all_device_info", "device_info", "lidar_data")
+    __slots__ = ("req_uuid", "ok", "err_id_not_found", "err_not_supported", "err_cannot_execute", "err_failed_execute", "all_device_info", "device_info", "lidar_data", "room_data")
     REQ_UUID_FIELD_NUMBER: _ClassVar[int]
     OK_FIELD_NUMBER: _ClassVar[int]
     ERR_ID_NOT_FOUND_FIELD_NUMBER: _ClassVar[int]
@@ -96,6 +110,7 @@ class Response(_message.Message):
     ALL_DEVICE_INFO_FIELD_NUMBER: _ClassVar[int]
     DEVICE_INFO_FIELD_NUMBER: _ClassVar[int]
     LIDAR_DATA_FIELD_NUMBER: _ClassVar[int]
+    ROOM_DATA_FIELD_NUMBER: _ClassVar[int]
     req_uuid: str
     ok: _empty_pb2.Empty
     err_id_not_found: _empty_pb2.Empty
@@ -105,7 +120,8 @@ class Response(_message.Message):
     all_device_info: AllDeviceInfo
     device_info: DeviceInfo
     lidar_data: Lidar
-    def __init__(self, req_uuid: _Optional[str] = ..., ok: _Optional[_Union[_empty_pb2.Empty, _Mapping]] = ..., err_id_not_found: _Optional[_Union[_empty_pb2.Empty, _Mapping]] = ..., err_not_supported: _Optional[_Union[_empty_pb2.Empty, _Mapping]] = ..., err_cannot_execute: _Optional[_Union[_empty_pb2.Empty, _Mapping]] = ..., err_failed_execute: _Optional[_Union[_empty_pb2.Empty, _Mapping]] = ..., all_device_info: _Optional[_Union[AllDeviceInfo, _Mapping]] = ..., device_info: _Optional[_Union[DeviceInfo, _Mapping]] = ..., lidar_data: _Optional[_Union[Lidar, _Mapping]] = ...) -> None: ...
+    room_data: RoomInfo
+    def __init__(self, req_uuid: _Optional[str] = ..., ok: _Optional[_Union[_empty_pb2.Empty, _Mapping]] = ..., err_id_not_found: _Optional[_Union[_empty_pb2.Empty, _Mapping]] = ..., err_not_supported: _Optional[_Union[_empty_pb2.Empty, _Mapping]] = ..., err_cannot_execute: _Optional[_Union[_empty_pb2.Empty, _Mapping]] = ..., err_failed_execute: _Optional[_Union[_empty_pb2.Empty, _Mapping]] = ..., all_device_info: _Optional[_Union[AllDeviceInfo, _Mapping]] = ..., device_info: _Optional[_Union[DeviceInfo, _Mapping]] = ..., lidar_data: _Optional[_Union[Lidar, _Mapping]] = ..., room_data: _Optional[_Union[RoomInfo, _Mapping]] = ...) -> None: ...
 
 class Command(_message.Message):
     __slots__ = ("target_id", "transform")
@@ -116,7 +132,7 @@ class Command(_message.Message):
     def __init__(self, target_id: _Optional[str] = ..., transform: _Optional[_Union[Transform, _Mapping]] = ...) -> None: ...
 
 class ServerRequest(_message.Message):
-    __slots__ = ("req_uuid", "post_device_info", "post_heartbeat", "fetch_all_device_info", "fetch_single_device_info", "send_command", "fetch_lidar_data", "post_raw_lidar_scan")
+    __slots__ = ("req_uuid", "post_device_info", "post_heartbeat", "fetch_all_device_info", "fetch_single_device_info", "send_command", "fetch_lidar_data", "post_raw_lidar_scan", "fetch_room_data")
     REQ_UUID_FIELD_NUMBER: _ClassVar[int]
     POST_DEVICE_INFO_FIELD_NUMBER: _ClassVar[int]
     POST_HEARTBEAT_FIELD_NUMBER: _ClassVar[int]
@@ -125,6 +141,7 @@ class ServerRequest(_message.Message):
     SEND_COMMAND_FIELD_NUMBER: _ClassVar[int]
     FETCH_LIDAR_DATA_FIELD_NUMBER: _ClassVar[int]
     POST_RAW_LIDAR_SCAN_FIELD_NUMBER: _ClassVar[int]
+    FETCH_ROOM_DATA_FIELD_NUMBER: _ClassVar[int]
     req_uuid: str
     post_device_info: DeviceInfo
     post_heartbeat: str
@@ -133,7 +150,8 @@ class ServerRequest(_message.Message):
     send_command: Command
     fetch_lidar_data: _empty_pb2.Empty
     post_raw_lidar_scan: RawLidarScan
-    def __init__(self, req_uuid: _Optional[str] = ..., post_device_info: _Optional[_Union[DeviceInfo, _Mapping]] = ..., post_heartbeat: _Optional[str] = ..., fetch_all_device_info: _Optional[_Union[_empty_pb2.Empty, _Mapping]] = ..., fetch_single_device_info: _Optional[str] = ..., send_command: _Optional[_Union[Command, _Mapping]] = ..., fetch_lidar_data: _Optional[_Union[_empty_pb2.Empty, _Mapping]] = ..., post_raw_lidar_scan: _Optional[_Union[RawLidarScan, _Mapping]] = ...) -> None: ...
+    fetch_room_data: _empty_pb2.Empty
+    def __init__(self, req_uuid: _Optional[str] = ..., post_device_info: _Optional[_Union[DeviceInfo, _Mapping]] = ..., post_heartbeat: _Optional[str] = ..., fetch_all_device_info: _Optional[_Union[_empty_pb2.Empty, _Mapping]] = ..., fetch_single_device_info: _Optional[str] = ..., send_command: _Optional[_Union[Command, _Mapping]] = ..., fetch_lidar_data: _Optional[_Union[_empty_pb2.Empty, _Mapping]] = ..., post_raw_lidar_scan: _Optional[_Union[RawLidarScan, _Mapping]] = ..., fetch_room_data: _Optional[_Union[_empty_pb2.Empty, _Mapping]] = ...) -> None: ...
 
 class ClientRequest(_message.Message):
     __slots__ = ("req_uuid", "fetch_device_info", "post_command")

@@ -10,9 +10,7 @@ from map.coordinate import SERVER_COORDS, TURTLEBOT_COORDS, convert_lidar, conve
 from map.map import Map
 from map.lidar import LIDAR_EPSILON, scan_to_world_points, simplify_lidar_2d
 from map.localization import ScanLocalizer
-
-# Offset added to every incoming position vector. Adjust to your task's spec.
-OFFSET = (0.1, 0.1, 2.0)
+from map.room import get_room_info
 
 # A device is dropped from the map once it has been quiet this long (seconds).
 TIMEOUT = 2.0
@@ -66,6 +64,9 @@ def fetch_single_device_info(device_id: str) -> Response:
 def fetch_lidar_data(_: Empty) -> Response:
     return server_map.get_lidar_data()
 
+def fetch_room_data(_: Empty) -> Response:
+    return Response(room_data=get_room_info())
+
 def handle_raw_lidar_scan(raw_scan: RawLidarScan) -> Response:
     lidar = convert_lidar(scan_to_world_points(raw_scan), TURTLEBOT_COORDS, SERVER_COORDS)
     transform = convert_transform(raw_scan.transform, TURTLEBOT_COORDS, SERVER_COORDS)
@@ -92,6 +93,7 @@ HANDLERS = {
     "send_command": send_command,
     "fetch_lidar_data": fetch_lidar_data,
     "post_raw_lidar_scan": handle_raw_lidar_scan,
+    "fetch_room_data": fetch_room_data,
 }
 
 def handle_request(req: ServerRequest) -> Response:

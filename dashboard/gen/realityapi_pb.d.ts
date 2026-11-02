@@ -12,6 +12,27 @@ import type { Empty } from "@bufbuild/protobuf/wkt";
 export declare const file_realityapi: GenFile;
 
 /**
+ * @generated from message realityapi.Vector2
+ */
+export declare type Vector2 = Message<"realityapi.Vector2"> & {
+  /**
+   * @generated from field: float x = 1;
+   */
+  x: number;
+
+  /**
+   * @generated from field: float y = 2;
+   */
+  y: number;
+};
+
+/**
+ * Describes the message realityapi.Vector2.
+ * Use `create(Vector2Schema)` to create a new message.
+ */
+export declare const Vector2Schema: GenMessage<Vector2>;
+
+/**
  * @generated from message realityapi.Vector3
  */
 export declare type Vector3 = Message<"realityapi.Vector3"> & {
@@ -123,6 +144,22 @@ export declare type RawLidarScan = Message<"realityapi.RawLidarScan"> & {
  * Use `create(RawLidarScanSchema)` to create a new message.
  */
 export declare const RawLidarScanSchema: GenMessage<RawLidarScan>;
+
+/**
+ * @generated from message realityapi.RoomInfo
+ */
+export declare type RoomInfo = Message<"realityapi.RoomInfo"> & {
+  /**
+   * @generated from field: repeated realityapi.Vector2 corners = 1;
+   */
+  corners: Vector2[];
+};
+
+/**
+ * Describes the message realityapi.RoomInfo.
+ * Use `create(RoomInfoSchema)` to create a new message.
+ */
+export declare const RoomInfoSchema: GenMessage<RoomInfo>;
 
 /**
  * @generated from message realityapi.DeviceInfo
@@ -250,6 +287,12 @@ export declare type Response = Message<"realityapi.Response"> & {
      */
     value: Lidar;
     case: "lidarData";
+  } | {
+    /**
+     * @generated from field: realityapi.RoomInfo room_data = 23;
+     */
+    value: RoomInfo;
+    case: "roomData";
   } | { case: undefined; value?: undefined };
 };
 
@@ -340,6 +383,12 @@ export declare type ServerRequest = Message<"realityapi.ServerRequest"> & {
      */
     value: RawLidarScan;
     case: "postRawLidarScan";
+  } | {
+    /**
+     * @generated from field: google.protobuf.Empty fetch_room_data = 11;
+     */
+    value: Empty;
+    case: "fetchRoomData";
   } | { case: undefined; value?: undefined };
 };
 

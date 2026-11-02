@@ -4,6 +4,11 @@ import "google/protobuf/empty.proto";
 
 package realityapi;
 
+message Vector2 {
+    float x = 1;
+    float y = 2;
+}
+
 message Vector3 {
   float x = 1;
   float y = 2;
@@ -28,6 +33,10 @@ message RawLidarScan {
     float range_max = 5;
     float angle_min = 6;
     float angle_increment = 7;
+}
+
+message RoomInfo {
+    repeated Vector2 corners = 1;
 }
 
 enum DeviceType {
@@ -74,6 +83,7 @@ message Response {
         AllDeviceInfo all_device_info = 20;
         DeviceInfo device_info = 21;
         Lidar lidar_data = 22;
+        RoomInfo room_data = 23;
     }
 }
 
@@ -97,6 +107,7 @@ message ServerRequest {
         Command send_command = 8;
         google.protobuf.Empty fetch_lidar_data = 9;
         RawLidarScan post_raw_lidar_scan = 10;
+        google.protobuf.Empty fetch_room_data = 11;
     }
 }
 

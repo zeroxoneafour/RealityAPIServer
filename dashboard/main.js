@@ -11,17 +11,6 @@ const sceneContainer = document.getElementById("scene-container");
 const WALL_HEIGHT = 3;
 const WALL_THICKNESS = 0.15;
 
-// Room corners (in meters)
-// (0, 0) is the corner furthest from the door.
-const roomCorners = [
-  { x: 0, z: 0 },
-  { x: 0, z: 15.45 },
-  { x: 5.16, z: 15.45 },
-  { x: 5.16, z: 12.26 },
-  { x: 9.07, z: 12.26 },
-  { x: 9.07, z: 0 }
-];
-
 // Scene, camera, and renderer
 const scene = new THREE.Scene();
 scene.background = new THREE.Color(0x20232a);
@@ -70,27 +59,6 @@ const directionalLight = new THREE.DirectionalLight(0xffffff, 2);
 directionalLight.position.set(5, 10, 5);
 scene.add(directionalLight);
 
-// Room floor
-// ShapeGeometry fills the exact L-shaped outline from roomCorners.
-const floorShape = new THREE.Shape();
-floorShape.moveTo(roomCorners[0].x, roomCorners[0].z);
-
-for (const corner of roomCorners.slice(1)) {
-  floorShape.lineTo(corner.x, corner.z);
-}
-
-floorShape.closePath();
-
-const floor = new THREE.Mesh(
-  new THREE.ShapeGeometry(floorShape),
-  new THREE.MeshBasicMaterial({
-    color: 0x68717d,
-    side: THREE.DoubleSide
-  })
-);
-floor.rotation.x = Math.PI / 2;
-scene.add(floor);
-
 // Coordinate axes
 // X is red, Y is green, and Z is blue. All axes begin at (0, 0, 0).
 scene.add(new THREE.AxesHelper(2));
@@ -123,7 +91,12 @@ createMapLabel("X", "#ff5555", [2.3, 0.15, 0]);
 createMapLabel("Y", "#65dc65", [0, 2.3, 0]);
 createMapLabel("Z", "#6fa8ff", [0, 0.15, 2.3]);
 
-// Room walls
+// Room geometry
+// Floor, walls, and outline come from the server's RoomInfo, so they live in
+// one group that is rebuilt whenever the room is fetched.
+const roomGroup = new THREE.Group();
+scene.add(roomGroup);
+
 function createWallBetween(start, end) {
   const dx = end.x - start.x;
   const dz = end.z - start.z;
@@ -146,22 +119,56 @@ function createWallBetween(start, end) {
     (start.z + end.z) / 2
   );
   wall.rotation.y = Math.atan2(-dz, dx);
-  scene.add(wall);
+  return wall;
 }
 
-for (let index = 0; index < roomCorners.length; index += 1) {
-  const start = roomCorners[index];
-  const end = roomCorners[(index + 1) % roomCorners.length];
-  createWallBetween(start, end);
-}
+// RoomInfo corners are Vector2s on the X/Z ground plane: Vector2.y is Z.
+function buildRoom(roomInfo) {
+  roomGroup.traverse((object) => {
+    object.geometry?.dispose();
+    object.material?.dispose();
+  });
+  roomGroup.clear();
 
-const roomOutline = new THREE.LineLoop(
-  new THREE.BufferGeometry().setFromPoints(
-    roomCorners.map((corner) => new THREE.Vector3(corner.x, 0.02, corner.z))
-  ),
-  new THREE.LineBasicMaterial({ color: 0xffffff })
-);
-scene.add(roomOutline);
+  const roomCorners = roomInfo.corners.map((corner) => ({ x: corner.x, z: corner.y }));
+  if (roomCorners.length < 3) return;
+
+  // Room floor
+  // ShapeGeometry fills the exact outline from roomCorners.
+  const floorShape = new THREE.Shape();
+  floorShape.moveTo(roomCorners[0].x, roomCorners[0].z);
+
+  for (const corner of roomCorners.slice(1)) {
+    floorShape.lineTo(corner.x, corner.z);
+  }
+
+  floorShape.closePath();
+
+  const floor = new THREE.Mesh(
+    new THREE.ShapeGeometry(floorShape),
+    new THREE.MeshBasicMaterial({
+      color: 0x68717d,
+      side: THREE.DoubleSide
+    })
+  );
+  floor.rotation.x = Math.PI / 2;
+  roomGroup.add(floor);
+
+  // Room walls
+  for (let index = 0; index < roomCorners.length; index += 1) {
+    const start = roomCorners[index];
+    const end = roomCorners[(index + 1) % roomCorners.length];
+    roomGroup.add(createWallBetween(start, end));
+  }
+
+  const roomOutline = new THREE.LineLoop(
+    new THREE.BufferGeometry().setFromPoints(
+      roomCorners.map((corner) => new THREE.Vector3(corner.x, 0.02, corner.z))
+    ),
+    new THREE.LineBasicMaterial({ color: 0xffffff })
+  );
+  roomGroup.add(roomOutline);
+}
 
 // Store 3D markers by device ID
 const robotMarkers = {};
@@ -348,6 +355,8 @@ function connect() {
   socket = new WebSocket(SERVER_URL);
   socket.binaryType = "arraybuffer";
 
+  socket.addEventListener("open", fetchRoom);
+
   socket.addEventListener("message", (event) => {
     const response = fromBinary(ResponseSchema, new Uint8Array(event.data));
     const pending = pendingRequests.get(response.reqUuid);
@@ -429,6 +438,18 @@ function updateDevices(devices) {
       delete lastPositions[key];
     }
   });
+}
+
+// Ask the server for the room layout and redraw it.
+async function fetchRoom() {
+  try {
+    const response = await request({ case: "fetchRoomData", value: {} });
+    if (response.data.case === "roomData") {
+      buildRoom(response.data.value);
+    }
+  } catch (error) {
+    console.error("Error fetching room:", error);
+  }
 }
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
